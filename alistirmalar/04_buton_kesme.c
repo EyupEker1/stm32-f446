@@ -1,36 +1,43 @@
-/*
- * main.c — NUCLEO-F446RE, register seviyesinde LED blink
- * LD2 = PA5, pin HIGH olunca yanar (UM1724).
- * Pin BSRR ile suruluyor: atomik, okuma gerektirmiyor.
- */
-
-#include <stdint.h>
-
-#define RCC_AHB1ENR (*(volatile uint32_t *)(0x40023830UL))  /* base 0x40023800 + 0x30 */
-#define GPIOA_MODER (*(volatile uint32_t *)(0x40020000UL))  /* base 0x40020000 + 0x00 */
-#define GPIOA_BSRR  (*(volatile uint32_t *)(0x40020018UL))  /* base 0x40020000 + 0x18 */
-
-#define LED_PIN 5u
+#include "stm32f446xx.h"
 
 int main(void)
 {
-    /* Clock acilmazsa yazma sessizce kaybolur, hata vermez. Ilk suphelin burasi. */
-    RCC_AHB1ENR |= (1u << 0);
+    /* 1) Clock'lar */
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;       /* LED portu  */
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;       /* buton portu */
+    RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;      /* santralci  */
 
-    /* Her pine 2 bit dustugu icin kaydirma LED_PIN*2. Once temizle, sonra yaz. */
-    GPIOA_MODER &= ~(3u << (LED_PIN * 2));
-    GPIOA_MODER |=  (1u << (LED_PIN * 2));   /* 01 = cikis */
+    /* 2) PA5 çıkış */
+    GPIOA->MODER &= ~GPIO_MODER_MODER5;
+    GPIOA->MODER |=  GPIO_MODER_MODER5_0;
+
+    /* 3) Santralci: 13. hat = Port C */
+    SYSCFG->EXTICR[3] &= ~SYSCFG_EXTICR4_EXTI13;
+    SYSCFG->EXTICR[3] |=  SYSCFG_EXTICR4_EXTI13_PC;
+
+    /* 4) Nöbetçi: düşen kenar */
+    EXTI->FTSR |= EXTI_FTSR_TR13;
+
+    /* 5) Nöbetçi: 13. hatta izin */
+    EXTI->IMR |= EXTI_IMR_MR13;
+    EXTI->PR   = EXTI_PR_PR13;       /* başlangıçta eski bayrak kalmasın */
+
+    /* 6) Kapı görevlisi */
+    NVIC_EnableIRQ(EXTI15_10_IRQn);
 
     while (1)
     {
-        /* "=" bilincli: 0 yazilan bite dokunulmaz, okumaya gerek yok.
-         * |= yazmak BSRR'yi kullanma sebebini yok eder. */
-        GPIOA_BSRR = (1u << LED_PIN);           /* BS5 -> yak */
-        for (volatile int i = 0; i < 500000; i++);
-
-        GPIOA_BSRR = (1u << (LED_PIN + 16));    /* BR5 -> sondur */
-        for (volatile int i = 0; i < 500000; i++);
+        /* CPU boş, her şey kesmeyle olur */
     }
 }
 
-/* TODO(H4): bos dongu gecikmesi saat hizina bagimli. SysTick ile degistirilecek. */
+/* 7) Butona basılınca CPU buraya gelir */
+void EXTI15_10_IRQHandler(void)
+{
+    EXTI->PR = EXTI_PR_PR13;                /* bayrağı sil (1 yaz = sil) */
+
+    if (GPIOA->ODR & GPIO_ODR_OD5)
+        GPIOA->BSRR = GPIO_BSRR_BR5;        /* söndür */
+    else
+        GPIOA->BSRR = GPIO_BSRR_BS5;        /* yak */
+}
